@@ -1,0 +1,330 @@
+var Class = require('coop/lib/coop').Class;
+
+var Agent = new Class({
+	initialize: function (match, options) {
+		this.match = match;
+
+		this.position = [0,0];
+
+		this.direction = [1,0];
+		this.speed = 0;
+	},
+
+	update: function (dt) {
+		for ( var i = 0; i < 2; i++ ) {
+			this.position[i] += this.speed * this.direction[i] * dt;
+		}
+	},
+
+	saveState: function (state) {
+		state.position = this.position.slice(0);
+		state.direction = this.direction.slice(0);
+		state.speed = this.speed;
+	},
+	loadState: function (state) {
+		this.position = state.position.slice(0);
+		this.direction = state.direction.slice(0);
+		this.speed = state.speed;
+	}
+});
+
+var Ball = Agent.derived({
+	initialize: function () {
+		this.super_initialize(Ball, arguments);
+
+		// Altitude is measured in metres
+		this.altitude = 0;
+		this.verticalSpeed = 0;
+
+		this.atFeetOf = null;
+	},
+
+	update: function (dt) {
+		this.super_update(Ball, arguments);
+
+		if ( this.atFeetOf ) {
+			var p = this.match.player[this.atFeetOf]
+			this.position = p.position.slice(0)
+			this.direction = p.direction.slice(0)
+			this.speed = p.speed
+			this.altitude = this.verticalSpeed = 0
+		}
+	},
+
+	toString: function () {
+		return 'ball @ ' + this.position
+			+ ' v='+this.speed
+			+ (this.atFeetOf ? ' player#'+this.atFeetOf : '');
+	},
+
+	saveState: function (state) {
+		this.super_saveState(Ball, arguments);
+		state.altitude = this.altitude;
+		state.verticalSpeed = this.verticalSpeed;
+		state.atFeetOf = this.atFeetOf;
+	},
+	loadState: function (state) {
+		this.super_loadState(Ball, arguments);
+		this.altitude = state.altitude;
+		this.verticalSpeed = state.verticalSpeed;
+		this.atFeetOf = state.atFeetOf;
+	}
+});
+
+
+
+var Player = Agent.derived({
+	initialize: function (match, options) {
+		this.super_initialize(Player, arguments);
+
+		this.id = options.id;
+		this.team = this.id % 2;
+	},
+
+	decideAction: function (decide) {
+		this.action = decide(this, this.getAvailableMoves());
+
+		if ( decide == this.match.decider )
+			console.log('player', this.id, 'decided on', this.action.toString());
+
+		return this.action;
+	},
+
+	performInteractions: function (players) {
+
+
+		// Collisions
+		if ( !this.hasCollided ) for ( var p of players ) {
+			if ( this.isCollidingWith(p) && this.isFacing(p) ) {
+				this.collide(p);
+				p.collide(this);
+			}
+		}
+	},
+
+	collide: function (other) {
+		this.hasCollided = true;
+	},
+
+	isCollidingWith: function (other) {
+		return distSq2(this.position, other.position) < 0.5;
+	},
+	isBehind: function (player) {
+		return !other.isFacing(this);
+	},
+	isFacing: function (other) {
+		var d = diff2(other.position, this.position);
+		return dot2(d, this.direction) > 0.25 * dot2(d,d);
+	},
+
+	performAction: function () {
+		this.action.perform(this);
+
+		this.hasCollided = false;
+	},
+
+	getAvailableMoves: function () {
+		return Action.actions.filter(a => a.isAvailableFor(this))
+	},
+
+	toString: function () {
+		return 'player#'+this.id + ' @ ' + this.position
+			+ ' v='+this.speed;
+	}
+})
+
+
+var Match = module.exports.Match = new Class({
+	pitchHalfL: 100,
+	pitchHalfW: 50,
+
+	initialize: function () {
+		this.ball = new Ball(this);
+		this.players = [
+			new Player(this, { id: 1 }),
+			new Player(this, { id: 2 })
+		]
+
+		this.player = {};
+		for ( var p of this.players ) this.player[p.id] = p;
+
+		this.players[0].position[0] = 0.1;
+
+		this.decider = monteCarloDecider;
+	},
+
+	update: function (dt) {
+		this.updateForPlayers(this.players, this.decider, dt);
+		console.log(this.ball.toString())
+		console.log(this.players.map(p => p.toString()))
+	},
+
+	updateForPlayers: function (players, decider, dt) {
+		players.map(p => p.decideAction(decider));
+		players.map(p => p.performInteractions(players));
+		players.map(p => p.performAction(dt));
+		players.map(p => p.update(dt));
+		this.ball.update(dt);
+	},
+
+	saveState: function (state) {
+		if ( !state ) {
+			state = {};
+			state.ball = {};
+			state.players = [ {} for (p of this.players) ];
+		}
+
+		this.ball.saveState(state.ball);
+		for ( var i = 0; i < this.players.length; i++ ) {
+			this.players[i].saveState(state.players[i]);
+		}
+
+		return state;
+	},
+
+	loadState: function (state) {
+		this.ball.loadState(state.ball);
+		for ( var i = 0; i < this.players.length; i++ ) {
+			this.players[i].loadState(state.players[i]);
+		}
+	}
+})
+
+var Action = module.exports.Action = Class.derived({
+	initialize: function (name, bases, properties) {
+		if ( !bases.length && !bases.__class__ && typeof BaseAction !== "undefined" )
+			bases.push(BaseAction);
+
+		this.super_initialize(Action, arguments);
+
+		//console.log(this.__name__, this.prototype.perform);
+
+		if ( this.prototype.perform ) {
+			Action.actions.push(
+				Action.action[this.__name__] = new this()
+			);
+		}
+	}
+});
+Action.action = {};
+Action.actions = [];
+
+var BaseAction = new Action('BaseAction', [], {
+	isAvailableFor: function (player) {
+		return true;
+	},
+
+	toString: function () {
+		return this.__class__.__name__;
+	}
+});
+
+var WhenBallNear = BaseAction.derived('WhenBallNear', {
+	isAvailableFor: function (player) {
+		return this.super_isAvailableFor(WhenBallNear, arguments)
+			&& !player.match.ball.atFeetOf
+			&& player.isCollidingWith(player.match.ball);
+	}
+});
+var WhenBallAtFeet = BaseAction.derived('WhenBallAtFeet', {
+	isAvailableFor: function (player) {
+		return this.super_isAvailableFor(WhenBallAtFeet, arguments)
+			&& player.match.ball.atFeetOf == player.id;
+	}
+});
+
+
+var MovementAction = new Action('MovementAction', [], {
+
+})
+
+
+new Action('ControlBall', [ WhenBallNear ], {
+	perform: function (player) {
+		player.match.ball.atFeetOf = player.id;
+	}
+});
+
+
+new Action('HoldBall', [ WhenBallAtFeet ], {
+	perform: function (player) {
+		if ( player.speed > 1 ) {
+			player.speed /= 2;
+		} else {
+			player.speed = 0;
+			player.match.ball.speed = 0;
+		}
+	}
+});
+
+new Action('Run', [], {
+	perform: function (player) {
+		player.speed = 1;
+	}
+});
+
+
+var randomDecider = (player, actions) => pickRandom(actions);
+var monteCarloDecider = (player, actions) => {
+	var max = -Infinity, action;
+	var state = player.match.saveState();
+	for ( var a of actions ) {
+		var iters = 10,
+			cumScore = 0;
+		for ( var i = 0; i < iters; i++ ) {
+
+			player.match.updateForPlayers(player.match.players, p => {
+				return p.id == player.id ? a : randomDecider.apply(null, arguments)
+			}, 1);
+
+			cumScore += weightedHeuristics(player);
+
+			player.match.loadState(state);
+		}
+
+		console.log('player', player.id, a.toString(), 'scored', cumScore);
+		if ( cumScore > max ) {
+			action = a;
+			max = cumScore;
+		}
+	}
+
+	return action;
+}
+
+
+var playerPosessionHeuristic = player => +(player.match.ball.atFeetOf == player.id);
+
+var ballPositionHeuristic = player => (player.team * 2 - 1) *
+	(player.match.pitchHalfL - player.match.ball.position[0]);
+
+var weightedHeuristics = player => {
+	return (
+		playerPosessionHeuristic(player) + ballPositionHeuristic(player)
+	);
+}
+
+// new Action('Sprint', {
+// 	when: {
+		
+// 	}
+// })
+// new Action('Sprint', {
+// 	when: {
+		
+// 	}
+// })
+
+function diff2(a,b) {
+	return [ a[0]-b[0], a[1]-b[1] ];
+}
+function distSq2(a,b) {
+	var c = diff2(a,b);
+	return dot2(c,c);
+}
+function dot2(a,b) {
+	return a[0]*b[0] + a[1]*b[1]
+}
+function pickRandom(items) {
+	return items[Math.floor(Math.random()*items.length)];
+}

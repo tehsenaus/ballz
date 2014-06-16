@@ -1,0 +1,15 @@
+
+var coop = require('coop/lib/coop');
+var sim = window.sim = require('../common/sim');
+
+var match = window.match = new sim.Match();
+
+var ViewModel = new coop.Class({
+	initialize: function () {
+
+	}
+});
+
+ko.applyBindings(window.viewModel = new ViewModel());
+
+match.update(1);
